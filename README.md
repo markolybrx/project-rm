@@ -1,56 +1,60 @@
-# Welcome to your Expo app 👋
+# tv-remote
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
-
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Setup (Termux)
 
 ```bash
-npm run reset-project
+cd ~/tv-remote
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Run in dev (Expo Go, on-device)
 
-### Other setup steps
+```bash
+npx expo start
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Build APK via EAS
 
-## Learn more
+```bash
+npx eas-cli build -p android --profile preview
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+If `eas.json` doesn't exist yet:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+cat > eas.json << 'EOF'
+{
+  "cli": { "version": ">= 5.9.0" },
+  "build": {
+    "preview": {
+      "android": { "buildType": "apk" }
+    },
+    "production": {}
+  },
+  "submit": { "production": {} }
+}
+EOF
+```
 
-## Join the community
+## What's built so far
 
-Join our community of developers creating universal apps.
+- Project scaffold (Expo + TypeScript, minimal deps — no React Navigation
+  yet, plain state-based screen switching to keep native-module surface
+  small for EAS builds)
+- Theme tokens (Material 3 style, Xiaomi orange accent)
+- Transport abstraction: `TransportManager` + `WifiTransport` /
+  `BluetoothTransport` / `IrTransport` stubs — interfaces are real, native
+  socket/HID/IR calls are TODO
+- Remote screen: dpad, transport switch, power/input/voice, volume/channel
+  rockers, back/home/menu/apps, streaming shortcut grid
+- Streaming app data with real package names — icons need actual asset
+  files dropped into `assets/icons/` (not included; see
+  `src/data/streamingApps.ts` for sourcing notes)
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Not built yet
+
+- Onboarding / Discover / Pairing-code / Keyboard / Edit-shortcuts /
+  Settings / Controller-mode screens (mocked in the earlier HTML
+  prototypes, not yet ported to RN)
+- Native modules for Wi-Fi TLS pairing, Bluetooth HID, IR
+- IR is blocked on confirming the TV actually has an IR receiver
