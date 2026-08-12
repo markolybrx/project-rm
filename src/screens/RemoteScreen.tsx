@@ -1,19 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { DPad } from '@/components/DPad';
-import { TransportSwitch } from '@/components/TransportSwitch';
-import { AppShortcutGrid } from '@/components/AppShortcutGrid';
-import { defaultStreamingApps, StreamingAppShortcut } from '@/data/streamingApps';
-import { colors, radius, spacing } from '@/theme/tokens';
-import { transportManager } from '@/transports/TransportManager';
-import { ConnectionState, RemoteKey, TransportType } from '@/transports/types';
-
-/**
- * Placeholder paired-device info until the Discover/Pair flow (next
- * phase) actually populates this from a real pairing session.
- */
-const MOCK_DEVICE_NAME = 'Xiaomi TV A 32';
-const MOCK_DEVICE_IP = '192.168.1.42';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { DPad } from '../components/DPad';
+import { TransportSwitch } from '../components/TransportSwitch';
+import { AppShortcutGrid } from '../components/AppShortcutGrid';
+import { defaultStreamingApps, StreamingAppShortcut } from '../data/streamingApps';
+import { colors, radius, spacing } from '../theme/tokens';
+import { transportManager } from '../transports/TransportManager';
+import { WifiTransport } from '../transports/WifiTransport';
+import { ConnectionState, RemoteKey, TransportType } from '../transports/types';
 
 export function RemoteScreen() {
   const [transport, setTransport] = useState<TransportType>(TransportType.WIFI);
@@ -21,6 +15,9 @@ export function RemoteScreen() {
     ConnectionState.DISCONNECTED
   );
   const [apps] = useState<StreamingAppShortcut[]>(defaultStreamingApps);
+  const [ipAddress, setIpAddress] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [tvName, setTvName] = useState('');
 
   useEffect(() => {
     transportManager.setActiveType(transport);
@@ -29,13 +26,28 @@ export function RemoteScreen() {
     return unsubscribe;
   }, [transport]);
 
+  async function handleTestConnection() {
+    if (!ipAddress.trim()) {
+      Alert.alert('Enter an IP first', "Find it under your TV's network settings.");
+      return;
+    }
+    setTesting(true);
+    try {
+      const wifi = transportManager.get(TransportType.WIFI) as WifiTransport;
+      const result = await wifi.testConnection(ipAddress.trim());
+      setTvName(ipAddress.trim());
+      Alert.alert('Connection test result', result);
+    } catch (err) {
+      Alert.alert('Connection test failed', String((err as Error).message));
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function send(key: RemoteKey) {
     try {
       await transportManager.sendKey(key);
     } catch (err) {
-      // Expected right now — transports are stubbed. Surfacing this
-      // instead of failing silently so it's obvious during dev builds
-      // which paths are still unimplemented.
       Alert.alert('Not yet implemented', String((err as Error).message));
     }
   }
@@ -48,28 +60,57 @@ export function RemoteScreen() {
       );
       return;
     }
+    if (next === TransportType.BLUETOOTH) {
+      Alert.alert(
+        'Not built yet',
+        'Bluetooth HID needs a custom native module that has not been written yet.'
+      );
+      return;
+    }
     setTransport(next);
   }
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.deviceStrip}>
-        <View
-          style={[
-            styles.statusDot,
-            {
-              backgroundColor:
-                connectionState === ConnectionState.CONNECTED
-                  ? colors.success
-                  : colors.inkFaint,
-            },
-          ]}
-        />
-        <Text style={styles.deviceName}>{MOCK_DEVICE_NAME}</Text>
-        <Text style={styles.deviceMeta}>
-          {transport} {'\u00B7'} {connectionState.toLowerCase()}
-        </Text>
-      </View>
+      {!tvName ? (
+        <View style={styles.connectForm}>
+          <Text style={styles.sectionLabel}>Connect to your TV (test connection)</Text>
+          <Text style={styles.helperText}>
+            Enter the Xiaomi TV's IP address (Settings → Network on the TV). This only tests
+            whether the phone can open a TLS connection to it — full pairing isn't built yet.
+          </Text>
+          <TextInput
+            style={styles.input}
+            placeholder="192.168.1.42"
+            placeholderTextColor={colors.inkFaint}
+            value={ipAddress}
+            onChangeText={setIpAddress}
+            keyboardType="numbers-and-punctuation"
+            autoCapitalize="none"
+          />
+          <Pressable style={styles.testBtn} onPress={handleTestConnection} disabled={testing}>
+            <Text style={styles.testBtnText}>{testing ? 'Testing…' : 'Test connection'}</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.deviceStrip}>
+          <View
+            style={[
+              styles.statusDot,
+              {
+                backgroundColor:
+                  connectionState === ConnectionState.CONNECTED
+                    ? colors.success
+                    : colors.inkFaint,
+              },
+            ]}
+          />
+          <Text style={styles.deviceName}>{tvName}</Text>
+          <Pressable onPress={() => setTvName('')}>
+            <Text style={styles.deviceMeta}>change</Text>
+          </Pressable>
+        </View>
+      )}
 
       <TransportSwitch value={transport} onChange={handleTransportChange} />
 
@@ -162,6 +203,23 @@ function Rocker({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 60 },
+  connectForm: { marginBottom: 18 },
+  helperText: { fontSize: 11.5, color: colors.inkFaint, lineHeight: 16, marginBottom: 10 },
+  input: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: 12,
+    fontSize: 14,
+    color: colors.ink,
+    marginBottom: 10,
+  },
+  testBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  testBtnText: { color: colors.onPrimary, fontWeight: '600', fontSize: 13.5 },
   deviceStrip: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   deviceName: { fontSize: 13.5, fontWeight: '500', color: colors.ink },

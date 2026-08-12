@@ -1,3 +1,4 @@
+import TcpSocket from 'react-native-tcp-socket';
 import {
   ConnectionState,
   InstalledApp,
@@ -7,26 +8,23 @@ import {
   TransportType,
 } from './types';
 
+const PAIRING_PORT = 6467;
+
 /**
  * Wi-Fi transport — Android TV Remote protocol v2.
  *
- * Real implementation, not yet wired up:
- *  1. Discovery: mDNS browse for `_androidtvremote2._tcp` on the LAN to
- *     find candidate TVs (name, IP, port).
- *  2. Pairing: open a TLS socket to the pairing port, exchange a
- *     self-signed client cert, TV displays a 6-digit code, app sends it
- *     back to confirm. Store the cert for reconnects — this is what lets
- *     future connections skip the code.
- *  3. Control: open a second TLS socket to the remote-control port, send
- *     protobuf-encoded key events. Keep it open for the life of the
- *     session; the TV will occasionally send back current-app/volume
- *     state on the same socket.
- *
- * None of steps 1-3 have native equivalents in plain Expo — this needs a
- * native module for TCP+TLS sockets (Expo's fetch/WebSocket APIs don't
- * expose raw TLS) and for mDNS discovery. Candidate approach: a small
- * Kotlin native module wrapping java.net.Socket + SSLContext, exposed to
- * JS via Expo Modules API.
+ * Real implementation status:
+ *  1. Discovery: not yet built — user enters TV IP manually for now.
+ *  2. TLS connectivity: testConnection() below actually opens a real TLS
+ *     socket to the TV's pairing port (6467) and reports what happens.
+ *     This is the first testable slice — confirms the phone can even
+ *     reach the TV over TLS before we build the actual pairing message
+ *     protocol on top of it.
+ *  3. Pairing handshake (PairingRequest/PairingOption/PairingSecret
+ *     protobuf messages, 6-digit code exchange) and the control-channel
+ *     key events (port 6466) are NOT built yet — connect()/sendKey()
+ *     below still throw. That's the next phase, once testConnection()
+ *     is confirmed working against the real TV.
  */
 export class WifiTransport implements Transport {
   readonly type = TransportType.WIFI;
@@ -48,39 +46,65 @@ export class WifiTransport implements Transport {
     this.listeners.forEach((l) => l(next));
   }
 
+  /**
+   * Diagnostic-only: opens a real TLS socket to the TV's pairing port and
+   * resolves with a description of what happened. Not part of the
+   * Transport interface — this is a standalone debug step, called
+   * directly from the UI's connect form.
+   */
+  async testConnection(ipAddress: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        client.destroy();
+        reject(new Error(`Timed out after 8s connecting to ${ipAddress}:${PAIRING_PORT}`));
+      }, 8000);
+
+      const client = TcpSocket.connectTLS(
+        {
+          host: ipAddress,
+          port: PAIRING_PORT,
+          rejectUnauthorized: false,
+        },
+        () => {
+          clearTimeout(timeout);
+          resolve(
+            `TLS handshake succeeded with ${ipAddress}:${PAIRING_PORT}. Socket is open — next step is sending the actual pairing request message.`
+          );
+          client.destroy();
+        }
+      );
+
+      client.on('error', (err: Error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Connection failed: ${err.message}`));
+      });
+    });
+  }
+
   async connect(_device: PairedDevice): Promise<void> {
-    // TODO: open TLS control socket using stored pairing cert.
     this.setState(ConnectionState.CONNECTING);
-    throw new Error('WifiTransport.connect: native TLS socket module not yet implemented');
+    throw new Error(
+      'WifiTransport.connect: pairing protocol not yet implemented — use testConnection() for now'
+    );
   }
 
   async disconnect(): Promise<void> {
-    // TODO: close the control socket.
     this.setState(ConnectionState.DISCONNECTED);
   }
 
   async sendKey(_key: RemoteKey): Promise<void> {
-    // TODO: encode key as protobuf KeyEvent message, write to control socket.
-    throw new Error('WifiTransport.sendKey: not yet implemented');
+    throw new Error('WifiTransport.sendKey: control channel not yet implemented');
   }
 
   async sendText(_text: string): Promise<void> {
-    // TODO: Android TV Remote v2 sends text as a sequence of key events,
-    // not a single string message — will likely reuse sendKey per character.
     throw new Error('WifiTransport.sendText: not yet implemented');
   }
 
   async getInstalledApps(): Promise<InstalledApp[]> {
-    // TODO: the v2 protocol exposes a "current app" field on the control
-    // socket but not a full installed-app list directly — may need a
-    // companion lightweight ADB-over-network call for this specific
-    // feature, gated behind Developer Options being enabled on the TV.
     return [];
   }
 
   async isSupported(): Promise<boolean> {
-    // Wi-Fi remote control works on any Google TV device — always true
-    // for this project's target hardware.
     return true;
   }
 }
