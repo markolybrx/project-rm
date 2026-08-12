@@ -9,6 +9,8 @@ import { transportManager } from '../transports/TransportManager';
 import { WifiTransport } from '../transports/WifiTransport';
 import { ConnectionState, RemoteKey, TransportType } from '../transports/types';
 
+type PairStage = 'enter-ip' | 'pairing' | 'enter-code' | 'paired';
+
 export function RemoteScreen() {
   const [transport, setTransport] = useState<TransportType>(TransportType.WIFI);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
@@ -16,7 +18,9 @@ export function RemoteScreen() {
   );
   const [apps] = useState<StreamingAppShortcut[]>(defaultStreamingApps);
   const [ipAddress, setIpAddress] = useState('');
-  const [testing, setTesting] = useState(false);
+  const [pairingCode, setPairingCode] = useState('');
+  const [stage, setStage] = useState<PairStage>('enter-ip');
+  const [busy, setBusy] = useState(false);
   const [tvName, setTvName] = useState('');
 
   useEffect(() => {
@@ -26,22 +30,48 @@ export function RemoteScreen() {
     return unsubscribe;
   }, [transport]);
 
-  async function handleTestConnection() {
+  function getWifi(): WifiTransport {
+    return transportManager.get(TransportType.WIFI) as WifiTransport;
+  }
+
+  async function handleStartPairing() {
     if (!ipAddress.trim()) {
       Alert.alert('Enter an IP first', "Find it under your TV's network settings.");
       return;
     }
-    setTesting(true);
+    setBusy(true);
     try {
-      const wifi = transportManager.get(TransportType.WIFI) as WifiTransport;
-      const result = await wifi.testConnection(ipAddress.trim());
-      setTvName(ipAddress.trim());
-      Alert.alert('Connection test result', result);
+      await getWifi().startPairing(ipAddress.trim(), 'TV Remote');
+      setStage('enter-code');
     } catch (err) {
-      Alert.alert('Connection test failed', String((err as Error).message));
+      Alert.alert('Pairing failed', String((err as Error).message));
     } finally {
-      setTesting(false);
+      setBusy(false);
     }
+  }
+
+  async function handleSubmitCode() {
+    setBusy(true);
+    try {
+      await getWifi().submitPairingCode(pairingCode.trim());
+      setTvName(ipAddress.trim());
+      setStage('paired');
+      Alert.alert('Paired', 'Pairing succeeded. Note: sending actual key presses is still the next phase to build.');
+    } catch (err) {
+      const debugInfo = getWifi().getPairingDebugInfo();
+      Alert.alert(
+        'Pairing failed',
+        `${(err as Error).message}\n\nDebug info:\n${JSON.stringify(debugInfo, null, 2)}`
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function resetPairing() {
+    setStage('enter-ip');
+    setPairingCode('');
+    setTvName('');
   }
 
   async function send(key: RemoteKey) {
@@ -54,17 +84,11 @@ export function RemoteScreen() {
 
   function handleTransportChange(next: TransportType) {
     if (next === TransportType.IR) {
-      Alert.alert(
-        'IR unconfirmed',
-        'IR support on this TV model has not been verified yet — see project notes.'
-      );
+      Alert.alert('IR unconfirmed', 'IR support on this TV model has not been verified yet.');
       return;
     }
     if (next === TransportType.BLUETOOTH) {
-      Alert.alert(
-        'Not built yet',
-        'Bluetooth HID needs a custom native module that has not been written yet.'
-      );
+      Alert.alert('Not built yet', 'Bluetooth HID needs a custom native module that has not been written yet.');
       return;
     }
     setTransport(next);
@@ -72,12 +96,11 @@ export function RemoteScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      {!tvName ? (
+      {stage === 'enter-ip' && (
         <View style={styles.connectForm}>
-          <Text style={styles.sectionLabel}>Connect to your TV (test connection)</Text>
+          <Text style={styles.sectionLabel}>Pair with your TV</Text>
           <Text style={styles.helperText}>
-            Enter the Xiaomi TV's IP address (Settings → Network on the TV). This only tests
-            whether the phone can open a TLS connection to it — full pairing isn't built yet.
+            Enter the Xiaomi TV's IP address (Settings → Network on the TV).
           </Text>
           <TextInput
             style={styles.input}
@@ -88,25 +111,49 @@ export function RemoteScreen() {
             keyboardType="numbers-and-punctuation"
             autoCapitalize="none"
           />
-          <Pressable style={styles.testBtn} onPress={handleTestConnection} disabled={testing}>
-            <Text style={styles.testBtnText}>{testing ? 'Testing…' : 'Test connection'}</Text>
+          <Pressable style={styles.testBtn} onPress={handleStartPairing} disabled={busy}>
+            <Text style={styles.testBtnText}>{busy ? 'Connecting…' : 'Pair'}</Text>
           </Pressable>
         </View>
-      ) : (
+      )}
+
+      {stage === 'enter-code' && (
+        <View style={styles.connectForm}>
+          <Text style={styles.sectionLabel}>Enter the code shown on your TV</Text>
+          <Text style={styles.helperText}>
+            The TV should now be displaying a 6-character code. Type it exactly as shown.
+          </Text>
+          <TextInput
+            style={styles.input}
+            placeholder="A1B2C3"
+            placeholderTextColor={colors.inkFaint}
+            value={pairingCode}
+            onChangeText={setPairingCode}
+            autoCapitalize="characters"
+            maxLength={6}
+          />
+          <Pressable style={styles.testBtn} onPress={handleSubmitCode} disabled={busy}>
+            <Text style={styles.testBtnText}>{busy ? 'Verifying…' : 'Confirm'}</Text>
+          </Pressable>
+          <Pressable onPress={resetPairing} style={{ marginTop: 10 }}>
+            <Text style={styles.helperText}>Start over</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {stage === 'paired' && (
         <View style={styles.deviceStrip}>
           <View
             style={[
               styles.statusDot,
               {
                 backgroundColor:
-                  connectionState === ConnectionState.CONNECTED
-                    ? colors.success
-                    : colors.inkFaint,
+                  connectionState === ConnectionState.CONNECTED ? colors.success : colors.inkFaint,
               },
             ]}
           />
           <Text style={styles.deviceName}>{tvName}</Text>
-          <Pressable onPress={() => setTvName('')}>
+          <Pressable onPress={resetPairing}>
             <Text style={styles.deviceMeta}>change</Text>
           </Pressable>
         </View>
@@ -159,9 +206,7 @@ export function RemoteScreen() {
       <Text style={styles.sectionLabel}>Streaming shortcuts</Text>
       <AppShortcutGrid
         apps={apps}
-        onPressApp={(app) =>
-          Alert.alert('Launch app', `Would launch ${app.label} (${app.packageName})`)
-        }
+        onPressApp={(app) => Alert.alert('Launch app', `Would launch ${app.label} (${app.packageName})`)}
         onPressEdit={() => Alert.alert('Edit shortcuts', 'Screen not yet built — next phase.')}
       />
     </ScrollView>
