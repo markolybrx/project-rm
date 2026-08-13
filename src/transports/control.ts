@@ -12,12 +12,6 @@ import { getOrCreateClientCertificate } from './certificate';
 
 const CONTROL_PORT = 6466;
 
-/**
- * These match the standard Android KeyEvent integer constants — the
- * protocol's enum is explicitly sourced from android/keycodes.h per the
- * upstream .proto comments, so these are stable public Android API
- * values, not protocol-specific guesses like the pairing crypto was.
- */
 export const RemoteKeyCode = {
   DPAD_UP: 19,
   DPAD_DOWN: 20,
@@ -38,10 +32,6 @@ export const RemoteKeyCode = {
   TV_INPUT: 178,
 } as const;
 
-// Declaration-order value for a normal (non-held) press. This one IS a
-// guess based on convention rather than a verified source — if key
-// presses send without error but the TV doesn't react, this is the
-// first thing to double check.
 const DIRECTION_SHORT = 1;
 
 export class ControlSession {
@@ -52,6 +42,19 @@ export class ControlSession {
   private send(bytes: number[]) {
     const framed = [...encodeVarint(bytes.length), ...bytes];
     this.socket.write(Buffer.from(framed));
+  }
+
+  private sendOwnConfigure() {
+    const deviceInfo = [
+      ...writeStringField(1, 'TV Remote'),
+      ...writeStringField(2, 'markolybrx'),
+      ...writeVarintField(3, 1),
+      ...writeStringField(4, ''),
+      ...writeStringField(5, 'com.markolybrx.tvremote'),
+      ...writeStringField(6, '0.1.0'),
+    ];
+    const configureInner = [...writeVarintField(1, 1), ...writeLenDelimited(2, deviceInfo)];
+    this.send(writeLenDelimited(1, configureInner));
   }
 
   private handleData(chunk: Buffer) {
@@ -68,23 +71,11 @@ export class ControlSession {
   }
 
   private dispatch(fields: Map<number, any>) {
-    if (fields.has(1)) {
-      // Server sent RemoteConfigure — identify ourselves back so it
-      // accepts us as an active remote.
-      const deviceInfo = [
-        ...writeStringField(1, 'TV Remote'),
-        ...writeStringField(2, 'markolybrx'),
-        ...writeVarintField(3, 1),
-        ...writeStringField(4, ''),
-        ...writeStringField(5, 'com.markolybrx.tvremote'),
-        ...writeStringField(6, '0.1.0'),
-      ];
-      const configureInner = [...writeVarintField(1, 1), ...writeLenDelimited(2, deviceInfo)];
-      this.send(writeLenDelimited(1, configureInner));
+    if (fields.has(1) && !this.connected) {
+      this.sendOwnConfigure();
       this.connected = true;
     }
     if (fields.has(8)) {
-      // Server ping — must echo back or the TV drops the connection.
       const val1 = fields.get(8)?.value ?? 0;
       this.send(writeLenDelimited(9, writeVarintField(1, val1)));
     }
@@ -101,6 +92,8 @@ export class ControlSession {
         { host: ipAddress, port: CONTROL_PORT, key: keyPem, cert: certPem, rejectUnauthorized: false },
         () => {
           clearTimeout(timeout);
+          this.sendOwnConfigure();
+          this.connected = true;
           resolve();
         }
       );
