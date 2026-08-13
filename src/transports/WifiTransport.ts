@@ -1,4 +1,5 @@
 import TcpSocket from 'react-native-tcp-socket';
+import { ControlSession, RemoteKeyCode } from './control';
 import { PairingSession, PairingDebugInfo } from './pairing';
 import {
   ConnectionState,
@@ -11,21 +12,32 @@ import {
 
 const PAIRING_PORT = 6467;
 
+const KEY_MAP: Record<RemoteKey, number> = {
+  [RemoteKey.DPAD_UP]: RemoteKeyCode.DPAD_UP,
+  [RemoteKey.DPAD_DOWN]: RemoteKeyCode.DPAD_DOWN,
+  [RemoteKey.DPAD_LEFT]: RemoteKeyCode.DPAD_LEFT,
+  [RemoteKey.DPAD_RIGHT]: RemoteKeyCode.DPAD_RIGHT,
+  [RemoteKey.DPAD_CENTER]: RemoteKeyCode.DPAD_CENTER,
+  [RemoteKey.BACK]: RemoteKeyCode.BACK,
+  [RemoteKey.HOME]: RemoteKeyCode.HOME,
+  [RemoteKey.MENU]: RemoteKeyCode.MENU,
+  [RemoteKey.APPS]: RemoteKeyCode.APP_SWITCH,
+  [RemoteKey.POWER]: RemoteKeyCode.POWER,
+  [RemoteKey.INPUT_SOURCE]: RemoteKeyCode.TV_INPUT,
+  [RemoteKey.VOLUME_UP]: RemoteKeyCode.VOLUME_UP,
+  [RemoteKey.VOLUME_DOWN]: RemoteKeyCode.VOLUME_DOWN,
+  [RemoteKey.CHANNEL_UP]: RemoteKeyCode.CHANNEL_UP,
+  [RemoteKey.CHANNEL_DOWN]: RemoteKeyCode.CHANNEL_DOWN,
+  [RemoteKey.MUTE]: RemoteKeyCode.VOLUME_MUTE,
+  [RemoteKey.VOICE]: RemoteKeyCode.SEARCH,
+};
+
 /**
  * Wi-Fi transport — Android TV Remote protocol v2.
  *
- * Status:
- *  1. Discovery: not built — user enters TV IP manually.
- *  2. TLS connectivity test: testConnection() — confirmed working against
- *     the real TV.
- *  3. Pairing handshake: startPairing()/submitPairingCode() below, using
- *     PairingSession — implements the actual protocol (PairingRequest,
- *     Options/Configuration negotiation, RSA-cert-based secret exchange)
- *     ported from the verified open-source reference implementation.
- *     Not yet confirmed against the real TV.
- *  4. Control channel (port 6466, sending actual key events after
- *     pairing) — still not built. That's the next phase once pairing is
- *     confirmed working.
+ * Status: pairing confirmed working against the real TV. Control channel
+ * (real key presses) implemented below, following the same verified
+ * reference protocol — not yet confirmed against real hardware.
  */
 export class WifiTransport implements Transport {
   readonly type = TransportType.WIFI;
@@ -33,6 +45,7 @@ export class WifiTransport implements Transport {
   private state: ConnectionState = ConnectionState.DISCONNECTED;
   private listeners = new Set<(state: ConnectionState) => void>();
   private pairingSession: PairingSession | null = null;
+  private controlSession: ControlSession | null = null;
 
   getState(): ConnectionState {
     return this.state;
@@ -54,7 +67,6 @@ export class WifiTransport implements Transport {
         client.destroy();
         reject(new Error(`Timed out after 8s connecting to ${ipAddress}:${PAIRING_PORT}`));
       }, 8000);
-
       const client = TcpSocket.connectTLS(
         { host: ipAddress, port: PAIRING_PORT, rejectUnauthorized: false },
         () => {
@@ -70,10 +82,6 @@ export class WifiTransport implements Transport {
     });
   }
 
-  /**
-   * Starts real pairing. Resolves once the TV should be showing its
-   * 6-digit code on screen. Call submitPairingCode() next.
-   */
   async startPairing(ipAddress: string, clientName: string): Promise<void> {
     this.setState(ConnectionState.CONNECTING);
     this.pairingSession = new PairingSession();
@@ -87,8 +95,20 @@ export class WifiTransport implements Transport {
 
   async submitPairingCode(code: string): Promise<void> {
     if (!this.pairingSession) throw new Error('No pairing in progress — call startPairing first');
+    await this.pairingSession.submitCode(code);
+    // Pairing done — now open the actual control channel so buttons work.
+  }
+
+  getPairingDebugInfo(): PairingDebugInfo | null {
+    return this.pairingSession?.getDebugInfo() ?? null;
+  }
+
+  async connect(device: PairedDevice): Promise<void> {
+    if (!device.ipAddress) throw new Error('No IP address on this device');
+    this.setState(ConnectionState.CONNECTING);
+    this.controlSession = new ControlSession();
     try {
-      await this.pairingSession.submitCode(code);
+      await this.controlSession.connect(device.ipAddress);
       this.setState(ConnectionState.CONNECTED);
     } catch (err) {
       this.setState(ConnectionState.ERROR);
@@ -96,25 +116,23 @@ export class WifiTransport implements Transport {
     }
   }
 
-  getPairingDebugInfo(): PairingDebugInfo | null {
-    return this.pairingSession?.getDebugInfo() ?? null;
-  }
-
-  async connect(_device: PairedDevice): Promise<void> {
-    throw new Error('WifiTransport.connect: use startPairing/submitPairingCode, then the control channel (not yet built)');
-  }
-
   async disconnect(): Promise<void> {
     this.pairingSession?.close();
+    this.controlSession?.close();
     this.setState(ConnectionState.DISCONNECTED);
   }
 
-  async sendKey(_key: RemoteKey): Promise<void> {
-    throw new Error('WifiTransport.sendKey: control channel (port 6466) not yet implemented');
+  async sendKey(key: RemoteKey): Promise<void> {
+    if (!this.controlSession || !this.controlSession.isConnected()) {
+      throw new Error('Control channel not connected yet');
+    }
+    const code = KEY_MAP[key];
+    if (code === undefined) throw new Error(`No mapping for key ${key}`);
+    this.controlSession.sendKey(code);
   }
 
   async sendText(_text: string): Promise<void> {
-    throw new Error('WifiTransport.sendText: not yet implemented');
+    throw new Error('WifiTransport.sendText: IME text injection not yet implemented');
   }
 
   async getInstalledApps(): Promise<InstalledApp[]> {

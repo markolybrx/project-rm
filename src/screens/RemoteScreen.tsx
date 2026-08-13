@@ -4,12 +4,13 @@ import { DPad } from '../components/DPad';
 import { TransportSwitch } from '../components/TransportSwitch';
 import { AppShortcutGrid } from '../components/AppShortcutGrid';
 import { defaultStreamingApps, StreamingAppShortcut } from '../data/streamingApps';
+import { ControllerScreen } from './ControllerScreen';
 import { colors, radius, spacing } from '../theme/tokens';
 import { transportManager } from '../transports/TransportManager';
 import { WifiTransport } from '../transports/WifiTransport';
 import { ConnectionState, RemoteKey, TransportType } from '../transports/types';
 
-type PairStage = 'enter-ip' | 'pairing' | 'enter-code' | 'paired';
+type PairStage = 'enter-ip' | 'enter-code' | 'paired';
 
 export function RemoteScreen() {
   const [transport, setTransport] = useState<TransportType>(TransportType.WIFI);
@@ -22,6 +23,7 @@ export function RemoteScreen() {
   const [stage, setStage] = useState<PairStage>('enter-ip');
   const [busy, setBusy] = useState(false);
   const [tvName, setTvName] = useState('');
+  const [screenMode, setScreenMode] = useState<'remote' | 'controller'>('remote');
 
   useEffect(() => {
     transportManager.setActiveType(transport);
@@ -54,9 +56,14 @@ export function RemoteScreen() {
     setBusy(true);
     try {
       await getWifi().submitPairingCode(pairingCode.trim());
+      await transportManager.connect({
+        id: ipAddress.trim(),
+        name: ipAddress.trim(),
+        ipAddress: ipAddress.trim(),
+        transport: TransportType.WIFI,
+      });
       setTvName(ipAddress.trim());
       setStage('paired');
-      Alert.alert('Paired', 'Pairing succeeded. Note: sending actual key presses is still the next phase to build.');
     } catch (err) {
       const debugInfo = getWifi().getPairingDebugInfo();
       Alert.alert(
@@ -96,6 +103,25 @@ export function RemoteScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <View style={styles.modeToggle}>
+        <Pressable
+          style={[styles.modeTab, screenMode === 'remote' && styles.modeTabActive]}
+          onPress={() => setScreenMode('remote')}
+        >
+          <Text style={[styles.modeText, screenMode === 'remote' && styles.modeTextActive]}>Remote</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.modeTab, screenMode === 'controller' && styles.modeTabActive]}
+          onPress={() => setScreenMode('controller')}
+        >
+          <Text style={[styles.modeText, screenMode === 'controller' && styles.modeTextActive]}>Controller</Text>
+        </Pressable>
+      </View>
+
+      {screenMode === 'controller' ? (
+        <ControllerScreen />
+      ) : (
+        <>
       {stage === 'enter-ip' && (
         <View style={styles.connectForm}>
           <Text style={styles.sectionLabel}>Pair with your TV</Text>
@@ -209,6 +235,8 @@ export function RemoteScreen() {
         onPressApp={(app) => Alert.alert('Launch app', `Would launch ${app.label} (${app.packageName})`)}
         onPressEdit={() => Alert.alert('Edit shortcuts', 'Screen not yet built — next phase.')}
       />
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -248,6 +276,18 @@ function Rocker({
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.lg, paddingBottom: 60 },
+  modeToggle: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: colors.outlineSoft,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+    marginBottom: 18,
+  },
+  modeTab: { flex: 1, paddingVertical: 10, alignItems: 'center' },
+  modeTabActive: { backgroundColor: colors.primaryContainer },
+  modeText: { fontSize: 12.5, fontWeight: '600', color: colors.inkVariant },
+  modeTextActive: { color: colors.onPrimaryContainer },
   connectForm: { marginBottom: 18 },
   helperText: { fontSize: 11.5, color: colors.inkFaint, lineHeight: 16, marginBottom: 10 },
   input: {
